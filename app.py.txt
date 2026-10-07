@@ -1,0 +1,57 @@
+import streamlit as st
+import requests
+import tempfile
+from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.hazmat.primitives import serialization
+
+st.set_page_config(page_title="Consulta eSocial", page_icon="🏢")
+st.title("🏢 Consulta de Fechamento do eSocial")
+
+# Campos de Entrada Web
+cnpj = st.text_input("CNPJ da Empresa (Somente números)", value="")
+competencia = st.text_input("Competência (AAAA-MM)", value="2023-10")
+cert_file = st.file_uploader("Upload do Certificado A1 (.pfx)", type=["pfx", "p12"])
+senha = st.text_input("Senha do Certificado", type="password")
+
+if st.button("Consultar Status"):
+    if not cnpj or not cert_file or not senha:
+        st.warning("Por favor, preencha todos os campos e faça o upload do certificado.")
+    else:
+        with st.spinner("Conectando ao eSocial..."):
+            try:
+                # Leitura do certificado
+                pfx_bytes = cert_file.read()
+                private_key, certificate, _ = pkcs12.load_key_and_certificates(
+                    pfx_bytes, senha.encode()
+                )
+
+                # Arquivos temporários em memória
+                with tempfile.NamedTemporaryFile(delete=False) as cert_tmp, \
+                     tempfile.NamedTemporaryFile(delete=False) as key_tmp:
+                    
+                    cert_tmp.write(certificate.public_bytes(serialization.Encoding.PEM))
+                    key_tmp.write(private_key.private_bytes(
+                        encoding=serialization.Encoding.PEM,
+                        format=serialization.PrivateFormat.PKCS8,
+                        encryption_algorithm=serialization.NoEncryption()
+                    ))
+                    
+                    cert_path = cert_tmp.name
+                    key_path = key_tmp.name
+
+                # Requisição SOAP ao eSocial
+                url = "https://webservices.esocial.gov.br/servicos/empregador/consultaloteeventos/WsConsultaLoteEventos.svc"
+                headers = {"Content-Type": "application/soap+xml; charset=utf-8"}
+                soap_xml = f"""<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+                    <soap:Body><!-- Payload com CNPJ {cnpj} e Competência {competencia} --></soap:Body>
+                </soap:Envelope>"""
+
+                response = requests.post(url, data=soap_xml, headers=headers, cert=(cert_path, key_path))
+
+                if "S-1299" in response.text:
+                    st.success(f" O mês {competencia} está FECHADO para o CNPJ {cnpj}.")
+                else:
+                    st.error(f" O mês {competencia} está ABERTO para o CNPJ {cnpj}.")
+
+            except Exception as e:
+                st.error(f"Erro na consulta: {e}")
